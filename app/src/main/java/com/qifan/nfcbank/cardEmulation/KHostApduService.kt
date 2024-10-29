@@ -104,28 +104,22 @@ class KHostApduService : HostApduService() {
         0x82.toByte(), // SW2	Status byte 2 - Command processing qualifier
     )
 
-    private val NDEF_ID = byteArrayOf(0xE1.toByte(), 0x04.toByte())
-
-    private var NDEF_URI = NdefMessage(createTextRecord("en", "Ciao, come va?", NDEF_ID))
-    private var NDEF_URI_BYTES = NDEF_URI.toByteArray()
-    private var NDEF_URI_LEN = fillByteArrayToFixedDimension(
-        BigInteger.valueOf(NDEF_URI_BYTES.size.toLong()).toByteArray(),
-        2,
+    private val GET_TEXT_APDU = byteArrayOf(
+        0x00.toByte(), // CLA	- Class - Class of instruction
+        0xb0.toByte(), // INS	- Instruction - Instruction code
+        0x00.toByte(), // P1	- Parameter 1 - Instruction parameter 1
+        0x00.toByte(), // P2	- Parameter 2 - Instruction parameter 2
+        0x00.toByte(), // Lc field	- Number of bytes present in the data field of the command
     )
 
+    var value = ""
+
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
-        if (intent?.hasExtra("ndefMessage")!!) {
-            NDEF_URI =
-                NdefMessage(createTextRecord("en", intent.getStringExtra("ndefMessage")!!, NDEF_ID))
-
-            NDEF_URI_BYTES = NDEF_URI.toByteArray()
-            NDEF_URI_LEN = fillByteArrayToFixedDimension(
-                BigInteger.valueOf(NDEF_URI_BYTES.size.toLong()).toByteArray(),
-                2,
-            )
+        intent?.getStringExtra("ndefMessage")?.let {
+            value = it.toByteArray().joinToString("") { b ->
+                String.format("%02X", b)
+            }
         }
-
-        Log.i(TAG, "onStartCommand() | NDEF$NDEF_URI")
 
         return Service.START_STICKY
     }
@@ -144,78 +138,9 @@ class KHostApduService : HostApduService() {
             Log.i(TAG, "APDU_SELECT triggered. Our Response: " + A_OKAY.toHex())
             return A_OKAY
         }
-
-        //
-        // Second command: Capability Container select (Section 5.5.3 in NFC Forum spec)
-        //
-        if (CAPABILITY_CONTAINER_OK.contentEquals(commandApdu)) {
-            Log.i(TAG, "CAPABILITY_CONTAINER_OK triggered. Our Response: " + A_OKAY.toHex())
-            return A_OKAY
-        }
-
-        //
-        // Third command: ReadBinary data from CC file (Section 5.5.4 in NFC Forum spec)
-        //
-        if (READ_CAPABILITY_CONTAINER.contentEquals(commandApdu) && !READ_CAPABILITY_CONTAINER_CHECK
-        ) {
-            Log.i(
-                TAG,
-                "READ_CAPABILITY_CONTAINER triggered. Our Response: " + READ_CAPABILITY_CONTAINER_RESPONSE.toHex(),
-            )
-            READ_CAPABILITY_CONTAINER_CHECK = true
-            return READ_CAPABILITY_CONTAINER_RESPONSE
-        }
-
-        //
-        // Fourth command: NDEF Select command (Section 5.5.5 in NFC Forum spec)
-        //
-        if (NDEF_SELECT_OK.contentEquals(commandApdu)) {
-            Log.i(TAG, "NDEF_SELECT_OK triggered. Our Response: " + A_OKAY.toHex())
-            return A_OKAY
-        }
-
-        if (NDEF_READ_BINARY_NLEN.contentEquals(commandApdu)) {
-            // Build our response
-            val response = ByteArray(NDEF_URI_LEN.size + A_OKAY.size)
-            System.arraycopy(NDEF_URI_LEN, 0, response, 0, NDEF_URI_LEN.size)
-            System.arraycopy(A_OKAY, 0, response, NDEF_URI_LEN.size, A_OKAY.size)
-
-            Log.i(TAG, "NDEF_READ_BINARY_NLEN triggered. Our Response: " + response.toHex())
-
-            READ_CAPABILITY_CONTAINER_CHECK = false
-            return response
-        }
-
-        if (commandApdu.sliceArray(0..1).contentEquals(NDEF_READ_BINARY)) {
-            val offset = commandApdu.sliceArray(2..3).toHex().toInt(16)
-            val length = commandApdu.sliceArray(4..4).toHex().toInt(16)
-
-            val fullResponse = ByteArray(NDEF_URI_LEN.size + NDEF_URI_BYTES.size)
-            System.arraycopy(NDEF_URI_LEN, 0, fullResponse, 0, NDEF_URI_LEN.size)
-            System.arraycopy(
-                NDEF_URI_BYTES,
-                0,
-                fullResponse,
-                NDEF_URI_LEN.size,
-                NDEF_URI_BYTES.size,
-            )
-
-            Log.i(TAG, "NDEF_READ_BINARY triggered. Full data: " + fullResponse.toHex())
-            Log.i(TAG, "READ_BINARY - OFFSET: $offset - LEN: $length")
-
-            val slicedResponse = fullResponse.sliceArray(offset until fullResponse.size)
-
-            // Build our response
-            val realLength = if (slicedResponse.size <= length) slicedResponse.size else length
-            val response = ByteArray(realLength + A_OKAY.size)
-
-            System.arraycopy(slicedResponse, 0, response, 0, realLength)
-            System.arraycopy(A_OKAY, 0, response, realLength, A_OKAY.size)
-
-            Log.i(TAG, "NDEF_READ_BINARY triggered. Our Response: " + response.toHex())
-
-            READ_CAPABILITY_CONTAINER_CHECK = false
-            return response
+        if (GET_TEXT_APDU.contentEquals(commandApdu)) {
+            Log.i(TAG, "GET_TEXT_APDU triggered. Our Response: $value")
+            return value.hexStringToByteArray() + A_OKAY
         }
 
         //

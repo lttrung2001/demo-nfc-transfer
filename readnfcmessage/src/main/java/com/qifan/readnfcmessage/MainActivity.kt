@@ -119,57 +119,23 @@ class MainActivity : AppCompatActivity(), ReaderCallback {
             0x01.toByte(), // NDEF Tag Application name
             0x00.toByte(), // Le field	- Maximum number of bytes expected in the data field of the response to the command
         )
-        val CAPABILITY_CONTAINER_OK = byteArrayOf(
-            0x00.toByte(), // CLA	- Class - Class of instruction
-            0xa4.toByte(), // INS	- Instruction - Instruction code
-            0x00.toByte(), // P1	- Parameter 1 - Instruction parameter 1
-            0x0c.toByte(), // P2	- Parameter 2 - Instruction parameter 2
-            0x02.toByte(), // Lc field	- Number of bytes present in the data field of the command
-            0xe1.toByte(),
-            0x03.toByte(), // file identifier of the CC file
-        )
 
-        val READ_CAPABILITY_CONTAINER = byteArrayOf(
+        val GET_TEXT_APDU = byteArrayOf(
             0x00.toByte(), // CLA	- Class - Class of instruction
             0xb0.toByte(), // INS	- Instruction - Instruction code
             0x00.toByte(), // P1	- Parameter 1 - Instruction parameter 1
             0x00.toByte(), // P2	- Parameter 2 - Instruction parameter 2
-            0x0f.toByte(), // Lc field	- Number of bytes present in the data field of the command
-        )
-
-        val NDEF_SELECT_OK = byteArrayOf(
-            0x00.toByte(), // CLA	- Class - Class of instruction
-            0xa4.toByte(), // Instruction byte (INS) for Select command
-            0x00.toByte(), // Parameter byte (P1), select by identifier
-            0x0c.toByte(), // Parameter byte (P1), select by identifier
-            0x02.toByte(), // Lc field	- Number of bytes present in the data field of the command
-            0xE1.toByte(),
-            0x04.toByte(), // file identifier of the NDEF file retrieved from the CC file
-        )
-
-        val NDEF_READ_BINARY = byteArrayOf(
-            0x00.toByte(), // Class byte (CLA)
-            0xb0.toByte(), // Instruction byte (INS) for ReadBinary command
-        )
-
-        val NDEF_READ_BINARY_NLEN = byteArrayOf(
-            0x00.toByte(), // Class byte (CLA)
-            0xb0.toByte(), // Instruction byte (INS) for ReadBinary command
-            0x00.toByte(),
-            0x00.toByte(), // Parameter byte (P1, P2), offset inside the CC file
-            0x02.toByte(), // Le field
+            0x00.toByte(), // Lc field	- Number of bytes present in the data field of the command
         )
 
         var response = isoDep.transceive(APDU_SELECT)
         println(response.toHex())
-        response = isoDep.transceive(CAPABILITY_CONTAINER_OK)
-        println(response.toHex())
-        response = isoDep.transceive(READ_CAPABILITY_CONTAINER)
-        println(response.toHex())
-        response = isoDep.transceive(NDEF_SELECT_OK)
-        println(response.toHex())
-        response = isoDep.transceive(NDEF_READ_BINARY_NLEN)
-        println(response.toHex())
+        response = isoDep.transceive(GET_TEXT_APDU)
+        decodeResponseApdu(response).let {
+            runOnUiThread {
+                mTvView.text = it
+            }
+        }
 //            nfcA.close()
     }
 
@@ -187,5 +153,31 @@ class MainActivity : AppCompatActivity(), ReaderCallback {
         }
 
         return result.toString()
+    }
+
+    fun decodeResponseApdu(responseApdu: ByteArray): String {
+        // Kiểm tra độ dài tối thiểu của response
+        if (responseApdu.size < 2) return "Response APDU không hợp lệ"
+
+        // Phân tách phần dữ liệu và mã trạng thái
+        val data = responseApdu.copyOfRange(0, responseApdu.size - 2)
+        val sw1 = responseApdu[responseApdu.size - 2].toInt() and 0xFF
+        val sw2 = responseApdu[responseApdu.size - 1].toInt() and 0xFF
+        val status = (sw1 shl 8) or sw2
+
+        // Giải mã mã trạng thái
+        val statusMeaning = when (status) {
+            0x9000 -> "Thành công"
+            0x6A82 -> "File không tồn tại"
+            0x6985 -> "Điều kiện không thỏa mãn"
+            0x6700 -> "Độ dài không đúng"
+            0x6A84 -> "Không đủ bộ nhớ trên thẻ"
+            0x6D00 -> "Lệnh APDU không hỗ trợ"
+            else -> "Lỗi không xác định với mã trạng thái: %04X".format(status)
+        }
+
+        // Kết quả giải mã
+        println("Dữ liệu: ${data.joinToString(" ")}\nTrạng thái: $statusMeaning")
+        return data.decodeToString()
     }
 }
