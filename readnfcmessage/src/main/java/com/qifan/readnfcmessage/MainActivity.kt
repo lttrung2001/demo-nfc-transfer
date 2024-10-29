@@ -1,19 +1,14 @@
 package com.qifan.readnfcmessage
 
-import android.app.PendingIntent
-import android.content.Intent
 import android.nfc.NdefMessage
 import android.nfc.NfcAdapter
 import android.nfc.NfcAdapter.ReaderCallback
 import android.nfc.Tag
 import android.nfc.tech.IsoDep
-import android.nfc.tech.Ndef
-import android.nfc.tech.NfcA
 import android.os.Build
 import android.os.Bundle
 import android.view.View
 import android.widget.TextView
-import android.widget.Toast
 import androidx.annotation.RequiresApi
 import androidx.appcompat.app.AppCompatActivity
 import com.qifan.readnfcmessage.parser.NdefMessageParser
@@ -21,7 +16,6 @@ import com.qifan.readnfcmessage.parser.NdefMessageParser
 
 class MainActivity : AppCompatActivity(), ReaderCallback {
     private var mNfcAdapter: NfcAdapter? = null
-    private var mPendingIntent: PendingIntent? = null
     private lateinit var mTvView: TextView
 
     @RequiresApi(Build.VERSION_CODES.M)
@@ -40,51 +34,11 @@ class MainActivity : AppCompatActivity(), ReaderCallback {
         } else {
             mTvView.text = getString(R.string.tv_noNfc)
         }
-        println("onCreate")
-    }
-
-    override fun onResume() {
-        super.onResume()
-//        mPendingIntent =
-//            PendingIntent.getActivity(
-//                this,
-//                0,
-//                Intent(this, javaClass).addFlags(Intent.FLAG_ACTIVITY_SINGLE_TOP)
-//                    .setAction(NfcAdapter.ACTION_TAG_DISCOVERED),
-//                PendingIntent.FLAG_IMMUTABLE
-//            )
-//        mNfcAdapter?.enableForegroundDispatch(this, mPendingIntent, null, null)
-        println("onResume")
     }
 
     override fun onPause() {
         super.onPause()
         mNfcAdapter?.disableForegroundDispatch(this)
-    }
-
-//    override fun onNewIntent(intent: Intent) {
-//        super.onNewIntent(intent)
-//        if (NfcAdapter.ACTION_NDEF_DISCOVERED == intent.action) {
-//            println("NfcAdapter.ACTION_NDEF_DISCOVERED")
-//            intent.getParcelableArrayExtra(NfcAdapter.EXTRA_NDEF_MESSAGES)?.also { rawMessages ->
-//                val messages: List<NdefMessage> = rawMessages.map { it as NdefMessage }
-//                // Process the messages array.
-//                parserNDEFMessage(messages)
-//            }
-//        }
-//    }
-
-    private fun parserNDEFMessage(messages: List<NdefMessage>) {
-        val builder = StringBuilder()
-        val records = NdefMessageParser.parse(messages[0])
-        val size = records.size
-
-        for (i in 0 until size) {
-            val record = records[i]
-            val str = record.str()
-            builder.append(str).append("\n")
-        }
-        mTvView.text = builder.toString()
     }
 
     private fun initView() {
@@ -102,8 +56,12 @@ class MainActivity : AppCompatActivity(), ReaderCallback {
 
     override fun onTagDiscovered(tag: Tag?) {
         val isoDep = IsoDep.get(tag)
+        println("maxTransceiveLength: ${isoDep.maxTransceiveLength}")
+        println("isExtendedLengthApduSupported: ${isoDep.isExtendedLengthApduSupported}")
+        println("hiLayerResponse: ${isoDep.hiLayerResponse}")
+        println("historicalBytes: ${isoDep.historicalBytes}")
+        println("isoDep.isConnected: ${isoDep.isConnected}")
         isoDep.connect()
-        println(isoDep.isConnected)
         val APDU_SELECT = byteArrayOf(
             0x00.toByte(), // CLA	- Class - Class of instruction
             0xA4.toByte(), // INS	- Instruction - Instruction code
@@ -136,7 +94,7 @@ class MainActivity : AppCompatActivity(), ReaderCallback {
                 mTvView.text = it
             }
         }
-//            nfcA.close()
+        isoDep.close()
     }
 
     private fun ByteArray.toHex(): String {
