@@ -1,6 +1,5 @@
 package com.qifan.readnfcmessage
 
-import android.nfc.NdefMessage
 import android.nfc.NfcAdapter
 import android.nfc.NfcAdapter.ReaderCallback
 import android.nfc.Tag
@@ -11,7 +10,6 @@ import android.view.View
 import android.widget.TextView
 import androidx.annotation.RequiresApi
 import androidx.appcompat.app.AppCompatActivity
-import com.qifan.readnfcmessage.parser.NdefMessageParser
 
 
 class MainActivity : AppCompatActivity(), ReaderCallback {
@@ -21,6 +19,9 @@ class MainActivity : AppCompatActivity(), ReaderCallback {
     @RequiresApi(Build.VERSION_CODES.M)
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        println("onCreate")
+        val tag: Tag? = intent.extras?.getParcelable(NfcAdapter.EXTRA_TAG)
+        println(tag)
         setContentView(R.layout.activity_main)
         initView()
         mNfcAdapter = NfcAdapter.getDefaultAdapter(this)
