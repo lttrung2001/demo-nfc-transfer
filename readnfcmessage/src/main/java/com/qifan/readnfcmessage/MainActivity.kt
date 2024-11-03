@@ -10,6 +10,7 @@ import android.view.View
 import android.widget.TextView
 import androidx.annotation.RequiresApi
 import androidx.appcompat.app.AppCompatActivity
+import com.qifan.readnfcmessage.APDUCommand.APDU_SELECT_CARD_ACCESS
 
 
 class MainActivity : AppCompatActivity(), ReaderCallback {
@@ -57,86 +58,52 @@ class MainActivity : AppCompatActivity(), ReaderCallback {
 
     override fun onTagDiscovered(tag: Tag?) {
         val isoDep = IsoDep.get(tag)
-        println("maxTransceiveLength: ${isoDep.maxTransceiveLength}")
-        println("isExtendedLengthApduSupported: ${isoDep.isExtendedLengthApduSupported}")
-        println("hiLayerResponse: ${isoDep.hiLayerResponse}")
-        println("historicalBytes: ${isoDep.historicalBytes}")
-        println("isoDep.isConnected: ${isoDep.isConnected}")
+        isoDep.timeout = 5000
         isoDep.connect()
-        val APDU_SELECT = byteArrayOf(
-            0x00.toByte(), // CLA	- Class - Class of instruction
-            0xA4.toByte(), // INS	- Instruction - Instruction code
-            0x04.toByte(), // P1	- Parameter 1 - Instruction parameter 1
-            0x00.toByte(), // P2	- Parameter 2 - Instruction parameter 2
-            0x07.toByte(), // Lc field	- Number of bytes present in the data field of the command
-            0xD2.toByte(),
-            0x76.toByte(),
-            0x00.toByte(),
-            0x00.toByte(),
-            0x85.toByte(),
-            0x01.toByte(),
-            0x01.toByte(), // NDEF Tag Application name
-            0x00.toByte(), // Le field	- Maximum number of bytes expected in the data field of the response to the command
-        )
 
-        val GET_TEXT_APDU = byteArrayOf(
-            0x00.toByte(), // CLA	- Class - Class of instruction
-            0xb0.toByte(), // INS	- Instruction - Instruction code
-            0x00.toByte(), // P1	- Parameter 1 - Instruction parameter 1
-            0x00.toByte(), // P2	- Parameter 2 - Instruction parameter 2
-            0x00.toByte(), // Lc field	- Number of bytes present in the data field of the command
-        )
-
-        var response = isoDep.transceive(APDU_SELECT)
+        var response = isoDep.transceive(APDU_SELECT_CARD_ACCESS)
         println(response.toHex())
-        response = isoDep.transceive(GET_TEXT_APDU)
-        decodeResponseApdu(response).let {
-            runOnUiThread {
-                mTvView.text = it
-            }
+        readFile(
+            isoDep = isoDep,
+            offset = byteArrayOf(0x00, 0x00),
+            expectedResponseLength = 0x04
+        ).let {
+            println(it.toHex())
+            ASN1Parser.parse(it)
         }
+
         isoDep.close()
     }
 
-    private fun ByteArray.toHex(): String {
-        val HEX_CHARS = "0123456789ABCDEF".toCharArray()
-
-        val result = StringBuffer()
-
-        forEach {
-            val octet = it.toInt()
-            val firstIndex = (octet and 0xF0).ushr(4)
-            val secondIndex = octet and 0x0F
-            result.append(HEX_CHARS[firstIndex])
-            result.append(HEX_CHARS[secondIndex])
+    fun readFile(
+        isoDep: IsoDep,
+        offset: ByteArray,
+        expectedResponseLength: Int,
+    ): ByteArray {
+        var response = ByteArray(2)
+        println(response.toHex())
+        var totalBytesRead = 0
+        var isEndOfFile = false
+        val currentOffset = offset.copyOf()
+        var totalData = byteArrayOf()
+        while (!isEndOfFile) {
+            response = isoDep.transceive(
+                byteArrayOf(
+                    0x00.toByte(), // CLA (Class byte, mặc định 0x00)
+                    0xB0.toByte(), // INS (Instruction byte cho SELECT)
+                    currentOffset[0], // offset
+                    currentOffset[1], // offset
+                    expectedResponseLength.toByte()
+                )
+            )
+            println(response.toHex())
+            totalBytesRead += response.size - 2
+            currentOffset[1] = (currentOffset[1] + response.size - 2).toByte()
+            val data = response.copyOfRange(0, response.size - 2)
+            val status = response.copyOfRange(response.size - 2, response.size)
+            isEndOfFile = status.contentEquals(byteArrayOf(0x6A.toByte(), 0x86.toByte()))
+            totalData += data
         }
-
-        return result.toString()
-    }
-
-    fun decodeResponseApdu(responseApdu: ByteArray): String {
-        // Kiểm tra độ dài tối thiểu của response
-        if (responseApdu.size < 2) return "Response APDU không hợp lệ"
-
-        // Phân tách phần dữ liệu và mã trạng thái
-        val data = responseApdu.copyOfRange(0, responseApdu.size - 2)
-        val sw1 = responseApdu[responseApdu.size - 2].toInt() and 0xFF
-        val sw2 = responseApdu[responseApdu.size - 1].toInt() and 0xFF
-        val status = (sw1 shl 8) or sw2
-
-        // Giải mã mã trạng thái
-        val statusMeaning = when (status) {
-            0x9000 -> "Thành công"
-            0x6A82 -> "File không tồn tại"
-            0x6985 -> "Điều kiện không thỏa mãn"
-            0x6700 -> "Độ dài không đúng"
-            0x6A84 -> "Không đủ bộ nhớ trên thẻ"
-            0x6D00 -> "Lệnh APDU không hỗ trợ"
-            else -> "Lỗi không xác định với mã trạng thái: %04X".format(status)
-        }
-
-        // Kết quả giải mã
-        println("Dữ liệu: ${data.joinToString(" ")}\nTrạng thái: $statusMeaning")
-        return data.decodeToString()
+        return totalData
     }
 }
