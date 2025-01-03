@@ -65,45 +65,59 @@ class MainActivity : AppCompatActivity(), ReaderCallback {
         println(response.toHex())
         readFile(
             isoDep = isoDep,
-            offset = byteArrayOf(0x00, 0x00),
-            expectedResponseLength = 0x04
-        ).let {
-            println(it.toHex())
-            ASN1Parser.parse(it)
-        }
+            offset = 0x0000,
+            expectedResponseLength = 0x100
+        )
 
         isoDep.close()
     }
 
     fun readFile(
         isoDep: IsoDep,
-        offset: ByteArray,
-        expectedResponseLength: Int,
+        offset: Int,
+        expectedResponseLength: Int
     ): ByteArray {
-        var response = ByteArray(2)
-        println(response.toHex())
-        var totalBytesRead = 0
+        val totalData = mutableListOf<Byte>()
+        var currentOffset = offset
         var isEndOfFile = false
-        val currentOffset = offset.copyOf()
-        var totalData = byteArrayOf()
+
         while (!isEndOfFile) {
-            response = isoDep.transceive(
-                byteArrayOf(
-                    0x00.toByte(), // CLA (Class byte, mặc định 0x00)
-                    0xB0.toByte(), // INS (Instruction byte cho SELECT)
-                    currentOffset[0], // offset
-                    currentOffset[1], // offset
-                    expectedResponseLength.toByte()
-                )
+            // Tính toán offset byte cao (P1) và byte thấp (P2)
+            val p1 = (currentOffset shr 8).toByte()
+            val p2 = (currentOffset and 0xFF).toByte()
+
+            // Gửi lệnh APDU READ BINARY
+            val command = byteArrayOf(
+                0x00.toByte(), // CLA
+                0xB0.toByte(), // INS (READ BINARY)
+                p1, // P1 (MSB của offset)
+                p2, // P2 (LSB của offset)
+                expectedResponseLength.toByte() // Le (Độ dài dữ liệu mong muốn)
             )
+            val response = isoDep.transceive(command)
             println(response.toHex())
-            totalBytesRead += response.size - 2
-            currentOffset[1] = (currentOffset[1] + response.size - 2).toByte()
-            val data = response.copyOfRange(0, response.size - 2)
-            val status = response.copyOfRange(response.size - 2, response.size)
-            isEndOfFile = status.contentEquals(byteArrayOf(0x6A.toByte(), 0x86.toByte()))
-            totalData += data
+
+            // Kiểm tra trạng thái trả về
+            val status = response.takeLast(2).toByteArray()
+            if (status.contentEquals(byteArrayOf(0x90.toByte(), 0x00.toByte()))) {
+                // Đọc dữ liệu hợp lệ
+                val data = response.dropLast(2).toByteArray()
+                totalData.addAll(data.asList())
+                currentOffset += data.size
+
+                // Kiểm tra nếu dữ liệu đọc nhỏ hơn yêu cầu thì đã đến cuối file
+                if (data.size < expectedResponseLength) {
+                    isEndOfFile = true
+                }
+            } else if (status.contentEquals(byteArrayOf(0x6A.toByte(), 0x82.toByte()))) {
+                // File không tồn tại
+                throw Exception("File not found")
+            } else {
+                // Các lỗi khác
+                throw Exception("APDU command failed with status: ${status.toHex()}")
+            }
         }
-        return totalData
+
+        return totalData.toByteArray()
     }
 }
