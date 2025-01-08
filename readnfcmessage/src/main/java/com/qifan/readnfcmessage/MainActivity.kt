@@ -11,6 +11,13 @@ import android.widget.TextView
 import androidx.annotation.RequiresApi
 import androidx.appcompat.app.AppCompatActivity
 import com.qifan.readnfcmessage.APDUCommand.APDU_SELECT_CARD_ACCESS
+import java.security.KeyFactory
+import java.security.KeyPair
+import java.security.KeyPairGenerator
+import java.security.PrivateKey
+import java.security.PublicKey
+import java.security.spec.X509EncodedKeySpec
+import javax.crypto.KeyAgreement
 
 
 class MainActivity : AppCompatActivity(), ReaderCallback {
@@ -63,10 +70,13 @@ class MainActivity : AppCompatActivity(), ReaderCallback {
 
         var response = isoDep.transceive(APDU_SELECT_CARD_ACCESS)
         println(response.toHex())
-        readFile(
+        val cardAccessData = readFile(
             isoDep = isoDep,
             offset = 0x0000,
             expectedResponseLength = 0x100
+        )
+        performPACE(
+            isoDep = isoDep
         )
 
         isoDep.close()
@@ -119,5 +129,104 @@ class MainActivity : AppCompatActivity(), ReaderCallback {
         }
 
         return totalData.toByteArray()
+    }
+
+    fun performPACE(isoDep: IsoDep) {
+
+        // 1. Select PACE
+        var response = isoDep.transceive(APDUCommand.APDU_SELECT_PACE)
+        println("PACE selected: ${response.toHex()}")
+
+        // 2. Set Algorithm (MSE:SET AT)
+        response = isoDep.transceive(APDUCommand.APDU_MSE_SET_AT)
+        println("MSE:SET AT response: ${response.toHex()}")
+
+        // 3. Get Challenge
+        response = isoDep.transceive(APDUCommand.APDU_GET_CHALLENGE)
+        val nonce = response.copyOfRange(0, response.size - 2) // Exclude SW1 SW2
+        println("Challenge APDU response: ${response.toHex()}")
+        println("Challenge: ${nonce.toHex()}")
+
+        val last6CANNumber = "013808"
+        val canKey = generateCANPassword(last6CANNumber)
+
+        val appKeyPair = generateAppKeyPair()
+        val appPublicKey = appKeyPair.public
+        val appPrivateKey = appKeyPair.private
+        val cardPublicKey = sendAppPublicKeyAndGetCardPublicKey(
+            isoDep = isoDep,
+            appPublicKey = appPublicKey
+        )
+        // shared secret
+        val baseKey = calculateBaseKey(
+            privateKey = appPrivateKey,
+            cardPublicKey = cardPublicKey
+        )
+        println("baseKey: ${baseKey.toHex()}")
+
+
+        isoDep.close()
+    }
+
+    // Extension function for ByteArray to Hex String
+    fun ByteArray.toHex(): String = joinToString("") { "%02x".format(it) }
+
+    fun generateCANPassword(can: String): ByteArray {
+        // Chuyển số CAN thành mảng byte theo chuẩn ISO/IEC 8859-1
+        return can.toByteArray(Charsets.ISO_8859_1)
+    }
+
+    /**
+     * Tạo cặp khóa ECDH cho ứng dụng.
+     * @return Cặp khóa (PrivateKey và PublicKey).
+     */
+    fun generateAppKeyPair(): KeyPair {
+        val keyPairGenerator = KeyPairGenerator.getInstance("EC") // EC: Elliptic Curve
+        keyPairGenerator.initialize(256) // Độ dài khóa (256-bit curve)
+        return keyPairGenerator.generateKeyPair()
+    }
+
+    /**
+     * Tính toán Base Key (Kπ) bằng ECDH.
+     * @param privateKey Khóa riêng tư của ứng dụng (K_APP).
+     * @param cardPublicKey Khóa công khai từ thẻ (P_CARD).
+     * @return Base Key (Shared Secret).
+     */
+    fun calculateBaseKey(privateKey: PrivateKey, cardPublicKey: ByteArray): ByteArray {
+        // Tạo đối tượng PublicKey từ mảng byte P_CARD
+        val keyFactory = KeyFactory.getInstance("EC")
+        val pubKeySpec = X509EncodedKeySpec(cardPublicKey)
+        val publicKey: PublicKey = keyFactory.generatePublic(pubKeySpec)
+
+        // Khởi tạo KeyAgreement với Private Key (K_APP)
+        val keyAgreement = KeyAgreement.getInstance("ECDH")
+        keyAgreement.init(privateKey)
+
+        // Trao đổi khóa để tính toán shared secret
+        keyAgreement.doPhase(publicKey, true)
+        return keyAgreement.generateSecret() // Shared Secret (Base Key)
+    }
+
+    fun sendAppPublicKeyAndGetCardPublicKey(isoDep: IsoDep, appPublicKey: PublicKey): ByteArray {
+        // Mã hóa khóa công khai của ứng dụng (\(P_{\text{APP}}\)) theo chuẩn X.509
+        val appPublicKeyEncoded = appPublicKey.encoded
+
+        // Tạo lệnh APDU chứa khóa công khai ứng dụng
+        val apdu = byteArrayOf(
+            0x00.toByte(), // CLA
+            0x86.toByte(), // INS (General Authenticate)
+            0x00.toByte(), // P1
+            0x00.toByte(), // P2
+            (appPublicKeyEncoded.size + 4).toByte(), // Lc
+            0x7C.toByte(), // Tag for Dynamic Authentication Data
+            (appPublicKeyEncoded.size + 2).toByte(), // Length of Sub-tag + Public Key
+            0x83.toByte()  // Sub-tag for Public Key
+        ) + appPublicKeyEncoded
+
+        // Gửi lệnh APDU và nhận phản hồi từ thẻ
+        val response = isoDep.transceive(apdu)
+
+        // Loại bỏ 2 byte trạng thái (SW1, SW2) để lấy dữ liệu phản hồi
+        return response.copyOf(response.size - 2)
     }
 }
