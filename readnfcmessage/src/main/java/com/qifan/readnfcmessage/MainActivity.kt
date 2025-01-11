@@ -4,18 +4,19 @@ import android.nfc.NfcAdapter
 import android.nfc.NfcAdapter.ReaderCallback
 import android.nfc.Tag
 import android.nfc.tech.IsoDep
-import android.os.Build
 import android.os.Bundle
 import android.view.View
 import android.widget.TextView
-import androidx.annotation.RequiresApi
 import androidx.appcompat.app.AppCompatActivity
 import com.qifan.readnfcmessage.APDUCommand.APDU_SELECT_CARD_ACCESS
+import com.qifan.readnfcmessage.utils.PACEHandler
+import com.qifan.readnfcmessage.utils.PassportUtils
 import java.security.KeyFactory
 import java.security.KeyPair
 import java.security.KeyPairGenerator
 import java.security.PrivateKey
 import java.security.PublicKey
+import java.security.spec.ECGenParameterSpec
 import java.security.spec.X509EncodedKeySpec
 import javax.crypto.KeyAgreement
 
@@ -24,12 +25,8 @@ class MainActivity : AppCompatActivity(), ReaderCallback {
     private var mNfcAdapter: NfcAdapter? = null
     private lateinit var mTvView: TextView
 
-    @RequiresApi(Build.VERSION_CODES.M)
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        println("onCreate")
-        val tag: Tag? = intent.extras?.getParcelable(NfcAdapter.EXTRA_TAG)
-        println(tag)
         setContentView(R.layout.activity_main)
         initView()
         mNfcAdapter = NfcAdapter.getDefaultAdapter(this)
@@ -67,14 +64,28 @@ class MainActivity : AppCompatActivity(), ReaderCallback {
         val isoDep = IsoDep.get(tag)
         isoDep.timeout = 5000
         isoDep.connect()
-
-        var response = isoDep.transceive(APDU_SELECT_CARD_ACCESS)
+        println("isoDep ${isoDep.isConnected}")
+        val response = isoDep.transceive(APDU_SELECT_CARD_ACCESS)
         println(response.toHex())
-        val cardAccessData = readFile(
+        val mrzKey = PassportUtils.getMRZKey(
+            passportNumber = "097013808",
+            dateOfBirth = "161197",
+            dateOfExpiry = "161137"
+        )
+        println("mrzKey: $mrzKey")
+        val paceKey = PACEHandler.createPaceKey(mrzKey)
+        println("paceKey: ${paceKey.toHex()}")
+        val cardAccessData =
+            "3134300d060804007f0007020202020101300f060a04007f000702020302020201013012060a04007f0007020204020202010202010d".toByteArray() ?:
+            readFile(
             isoDep = isoDep,
             offset = 0x0000,
             expectedResponseLength = 0x100
         )
+
+        val asn1Element = ASN1Parser.parseIcaoData(cardAccessData)
+        println()
+
         performPACE(
             isoDep = isoDep
         )
@@ -149,27 +160,10 @@ class MainActivity : AppCompatActivity(), ReaderCallback {
 
         val last6CANNumber = "013808"
         val canKey = generateCANPassword(last6CANNumber)
-
-        val appKeyPair = generateAppKeyPair()
-        val appPublicKey = appKeyPair.public
-        val appPrivateKey = appKeyPair.private
-        val cardPublicKey = sendAppPublicKeyAndGetCardPublicKey(
-            isoDep = isoDep,
-            appPublicKey = appPublicKey
-        )
-        // shared secret
-        val baseKey = calculateBaseKey(
-            privateKey = appPrivateKey,
-            cardPublicKey = cardPublicKey
-        )
-        println("baseKey: ${baseKey.toHex()}")
-
+        println("canKey: $canKey")
 
         isoDep.close()
     }
-
-    // Extension function for ByteArray to Hex String
-    fun ByteArray.toHex(): String = joinToString("") { "%02x".format(it) }
 
     fun generateCANPassword(can: String): ByteArray {
         // Chuyển số CAN thành mảng byte theo chuẩn ISO/IEC 8859-1
@@ -181,8 +175,9 @@ class MainActivity : AppCompatActivity(), ReaderCallback {
      * @return Cặp khóa (PrivateKey và PublicKey).
      */
     fun generateAppKeyPair(): KeyPair {
-        val keyPairGenerator = KeyPairGenerator.getInstance("EC") // EC: Elliptic Curve
-        keyPairGenerator.initialize(256) // Độ dài khóa (256-bit curve)
+        val keyPairGenerator = KeyPairGenerator.getInstance("EC") // Elliptic Curve
+        val ecParameterSpec = ECGenParameterSpec("brainpoolP256r1")
+        keyPairGenerator.initialize(ecParameterSpec)
         return keyPairGenerator.generateKeyPair()
     }
 
@@ -205,28 +200,5 @@ class MainActivity : AppCompatActivity(), ReaderCallback {
         // Trao đổi khóa để tính toán shared secret
         keyAgreement.doPhase(publicKey, true)
         return keyAgreement.generateSecret() // Shared Secret (Base Key)
-    }
-
-    fun sendAppPublicKeyAndGetCardPublicKey(isoDep: IsoDep, appPublicKey: PublicKey): ByteArray {
-        // Mã hóa khóa công khai của ứng dụng (\(P_{\text{APP}}\)) theo chuẩn X.509
-        val appPublicKeyEncoded = appPublicKey.encoded
-
-        // Tạo lệnh APDU chứa khóa công khai ứng dụng
-        val apdu = byteArrayOf(
-            0x00.toByte(), // CLA
-            0x86.toByte(), // INS (General Authenticate)
-            0x00.toByte(), // P1
-            0x00.toByte(), // P2
-            (appPublicKeyEncoded.size + 4).toByte(), // Lc
-            0x7C.toByte(), // Tag for Dynamic Authentication Data
-            (appPublicKeyEncoded.size + 2).toByte(), // Length of Sub-tag + Public Key
-            0x83.toByte()  // Sub-tag for Public Key
-        ) + appPublicKeyEncoded
-
-        // Gửi lệnh APDU và nhận phản hồi từ thẻ
-        val response = isoDep.transceive(apdu)
-
-        // Loại bỏ 2 byte trạng thái (SW1, SW2) để lấy dữ liệu phản hồi
-        return response.copyOf(response.size - 2)
     }
 }
