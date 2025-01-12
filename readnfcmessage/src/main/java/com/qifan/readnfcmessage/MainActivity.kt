@@ -75,9 +75,7 @@ class MainActivity : AppCompatActivity(), ReaderCallback {
         println("mrzKey: $mrzKey")
         val paceKey = PACEHandler.createPaceKey(mrzKey)
         println("paceKey: ${paceKey.toHex()}")
-        val cardAccessData =
-            "3134300d060804007f0007020202020101300f060a04007f000702020302020201013012060a04007f0007020204020202010202010d".toByteArray() ?:
-            readFile(
+        val cardAccessData = readFile(
             isoDep = isoDep,
             offset = 0x0000,
             expectedResponseLength = 0x100
